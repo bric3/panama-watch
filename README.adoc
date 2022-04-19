@@ -1,0 +1,169 @@
+= Panama JDK 18
+
+== First contact
+
+.get the pid of the process
+[source,java]
+----
+var getpid = CLinker.systemCLinker()
+                    .downcallHandle(
+                            CLinker.systemCLinker().lookup("getpid").get(),
+                            FunctionDescriptor.of(ValueLayout.JAVA_LONG)
+                    );
+----
+
+
+.Down call for printf
+[source,java]
+----
+CLinker.systemCLinker().lookup("printf").get(),
+FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS) // <1>
+----
+<1> The printf function takes a pointer to a memory address.
+
+[source,java]
+----
+try (var scope = ResourceScope.newConfinedScope()) {
+  var allocator = SegmentAllocator.nativeAllocator(scope); // <1>
+  var memorySegment = allocator.allocateUtf8String(str); // <2>
+  return (long) printf.invoke(memorySegment.address()); // <3>
+}
+----
+<1> Need an scope and an allocator
+<2> To copy the Java String to a non heap memory segment
+<3> To call the printf function, note the `invoke` / `invokeExact`
+
+
+Note the invokeExact
+* `invokeExact((Addressable) memorySegment)`
+* `invokeExact((Addressable) memorySegment.address())`
+* `invoke(memorySegment.address())`
+* `invoke(memorySegment)`
+
+== TouchId
+
+Credits to https://github.com/carldea/panama4newbies/tree/main/macos-touchID[Carl Dea].
+
+[source, bash]
+----
+nm touchid-swift-lib/build/lib/main/release/shared/macos/libTouchIdDemoLib.dylib
+----
+
+Show `JAVA_LIBRARY_PATH`
+
+.Load library
+[source,java]
+----
+System.loadLibrary("TouchIdDemoLib");
+----
+
+.Downcall to swift method
+[source,java]
+----
+var authenticate_user = CLinker.systemCLinker().downcallHandle(
+        SymbolLookup.loaderLookup().lookup("authenticate_user_touchid").get(),
+        FunctionDescriptor.ofVoid()
+);
+
+try (var scope = ResourceScope.newConfinedScope()) {
+  authenticate_user.invoke();
+}
+----
+
+
+== BLAKE3
+
+=== Preparations
+
+.building libblake3.so
+[source, bash]
+----
+cd c
+# building the intrinsics-based implementations
+gcc -c -fPIC -O3 -msse2 blake3_sse2.c -o blake3_sse2.o
+gcc -c -fPIC -O3 -msse4.1 blake3_sse41.c -o blake3_sse41.o
+gcc -c -fPIC -O3 -mavx2 blake3_avx2.c -o blake3_avx2.o
+gcc -c -fPIC -O3 -mavx512f -mavx512vl blake3_avx512.c -o blake3_avx512.o
+gcc -shared -O3 -o libblake3.so blake3.c blake3_dispatch.c blake3_portable.c \
+    blake3_avx2.o blake3_avx512.o blake3_sse41.o blake3_sse2.o
+----
+
+
+.simple alias to jextract
+[source, bash]
+----
+alias jextract=$HOME/opensource/jextract/build/jextract.app/Contents/MacOS/jextract
+----
+
+.generates the blake3 mappings
+[source, bash]
+----
+jextract \
+  -d jdk18/build/generated/sources/jextract/java \
+  --source \
+  --target-package blake3 \
+  -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include \
+  ~/opensource/BLAKE3/c/blake3.h
+----
+
+=== Of string
+
+.Load the library
+[source, java]
+----
+System.load("/Users/brice.dutheil/opensource/BLAKE3/c/libblake3.so");
+----
+
+.Open a scope
+[source, java]
+----
+try (ResourceScope scope = ResourceScope.newConfinedScope()) {
+
+}
+----
+
+.Initialize the hasher
+[source, java]
+----
+var hasher = blake3_hasher.allocate(scope); // <1>
+blake3_h.blake3_hasher_init(hasher); // <2>
+----
+<1> blake3_hasher is specific data structure
+<2> blake3_hasher_init is a function that initializes the hasher
+
+.Add content to hasher
+[source, java]
+----
+var content = segmentAllocator.allocateUtf8String("Hello panama!\n");
+
+blake3_h.blake3_hasher_update(hasher, content, content.byteSize() - 1);
+----
+
+.Finish hashing
+[source, java]
+----
+var out = MemorySegment.allocateNative(
+        MemoryLayout.sequenceLayout(blake3_h.BLAKE3_OUT_LEN(), ValueLayout.JAVA_BYTE),
+        scope
+);
+blake3_h.blake3_hasher_finalize(hasher, out, blake3_h.BLAKE3_OUT_LEN());
+----
+
+
+
+
+
+=== Of file
+
+.Update the hasher with a segment from a memory mapped file
+[source, java]
+----
+var content = MemorySegment.mapFile(
+      path,
+      0,
+      Files.size(path),
+      MapMode.READ_ONLY,
+      scope
+);
+blake3_h.blake3_hasher_update(hasher, content, content.byteSize());
+----
