@@ -12,12 +12,24 @@ package io.github.bric3.panama.f.syscalls;
 import jdk.incubator.foreign.CLinker;
 import jdk.incubator.foreign.FunctionDescriptor;
 import jdk.incubator.foreign.MemoryAddress;
+import jdk.incubator.foreign.MemorySegment;
 import jdk.incubator.foreign.ResourceScope;
 import jdk.incubator.foreign.ValueLayout;
 
+import javax.imageio.stream.FileCacheImageInputStream;
 import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.RandomAccessFile;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileChannel.MapMode;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -78,7 +90,7 @@ public class LinuxSyscall {
 
     // https://github.com/mkerrisk/man-pages/blob/ae6b221882ce71ba82fcdbe02419a225111502f0/man2/memfd_secret.2
     memfd_secret();
-
+    memfd_secret_avoid_syscall();
   }
 
   private static void memfd_secret() throws Throwable {
@@ -156,25 +168,8 @@ public class LinuxSyscall {
       System.exit(1);
     }
     System.out.println("Secret mem fd: " + fd);
-    TimeUnit.SECONDS.sleep(15);
 
     try (ResourceScope scope = ResourceScope.newConfinedScope()) {
-
-      // NoSuchFile when trying to read again from the same fd
-      // var memFD = makeFD(fd);
-      //
-      // try (var fos = new FileOutputStream(memFD)) {
-      //   var printWriter = new PrintWriter(fos);
-      //   printWriter.write(secret);
-      //   printWriter.flush();
-      //
-      //   TimeUnit.SECONDS.sleep(1);
-      //
-      //   var buffer = ByteBuffer.allocate(secret.length());
-      //   var fdPath = Path.of("/proc/self/fd/" + fd);
-      //   Files.readAllLines(fdPath).forEach(System.out::println);
-      // }
-
       // Set the size
       System.out.println("Setting size");
       var res = (int) ftruncate.invoke(fd, secret.length());
@@ -182,15 +177,12 @@ public class LinuxSyscall {
         System.err.println("ftruncate failed, errno: " + errno());
       }
 
-      TimeUnit.SECONDS.sleep(15);
-
       System.out.println("Mapping");
       var segmentAddress = (MemoryAddress) mmap.invoke(NULL, secret.length(), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (segmentAddress.toRawLongValue() == -1) {
         System.err.println("mmap failed, errno: " + errno() + ", " + stderror(errno()));
         System.exit(1);
       }
-      TimeUnit.SECONDS.sleep(15);
 
       System.out.println("segmentAddress: " + segmentAddress);
 
@@ -204,6 +196,100 @@ public class LinuxSyscall {
       if (fd >= 0) {
         close.invoke(fd);
       }
+    }
+  }
+
+  private static void memfd_secret_avoid_syscall() throws Throwable {
+    System.out.println("starting memfd_secret avoiding syscalls");
+    var secret = "p@ss123";
+
+
+    var syscall = systemCLinker.downcallHandle(
+            systemCLinker.lookup("syscall").get(),
+            FunctionDescriptor.of(
+                    ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT // syscall number
+            ).appendArgumentLayouts(ValueLayout.JAVA_INT) // flags
+    );
+
+
+    // #define SYS_memfd_secret 447
+    var sys_memfd_secret = MethodHandles.insertArguments(systemCLinker.downcallHandle(
+            systemCLinker.lookup("syscall").get(),
+            FunctionDescriptor.of(
+                    ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT // syscall number
+            ).appendArgumentLayouts(ValueLayout.JAVA_INT) // flags
+    ), 0, 447);
+
+    // Create the anonymous RAM-based file
+    int fd = (int) sys_memfd_secret.invoke(0);
+    if (fd == -1) {
+      // non-existent system call, errno will be set to ENOSYS.
+      // gated by secretmem_enable
+      // https://github.com/torvalds/linux/commit/1507f51255c9ff07d75909a84e7c0d7f3c4b2f49#diff-659f2a8bad777301f059a00056336b415c41e024f88280a2131e0eabd7507b91R186-R187
+      var errno = errno();
+      System.err.println(errno == 38 ?
+                         "tried to call a syscall that doesn't exist (errno=ENOSYS), may need to set the 'secretmem.enable=1' kernel boot option" :
+                         "syscall memfd_secret failed, errno: " + errno);
+      System.exit(1);
+    }
+    System.out.println("Secret mem fd: " + fd);
+
+    try (ResourceScope scope = ResourceScope.newConfinedScope()) {
+
+      // NoSuchFile when trying to read again from the same fd
+
+      // var memfd = makeFD(fd);
+      // try (var fos = new FileOutputStream(memfd);
+      //      var fis = new FileInputStream(memfd);) {
+      //   var writeOnly = fos.getChannel().map( // => java.nio.channels.NonReadableChannelException
+      //           MapMode.READ_WRITE,
+      //           0,
+      //           secret.length() + 1
+      //   );
+      //   var readOnly = fis.getChannel().map(
+      //           MapMode.READ_ONLY,
+      //           0,
+      //           secret.length() + 1
+      //   );
+      //
+      //   writeOnly.put(secret.getBytes());
+      //
+      //   readOnly.flip();
+      //   var bytes = new byte[secret.length()];
+      //   readOnly.get(bytes);
+      //   System.out.println("Secret read: " + new String(bytes));
+      // }
+
+      // var secretSegment = MemorySegment.mapFile(
+      //         // Files.readSymbolicLink(Path.of("/proc/self/fd/" + fd)), // => java.nio.file.NoSuchFileException: /secretmem (deleted)
+      //         Path.of("/proc/self/fd/" + fd), // => java.nio.file.FileSystemException: /proc/self/fd/4: No such device or address
+      //         0,
+      //         secret.length() + 1,
+      //         MapMode.READ_WRITE,
+      //         scope
+      // );
+      //
+      // secretSegment.setUtf8String(0, secret);
+      //
+      // System.out.println("Secret segment: " + secretSegment.getUtf8String(0));;
+      
+      // var mappedByteBuffer = FileChannel.open(Files.readSymbolicLink(Path.of("/proc/self/fd/" + fd)),
+      //                            StandardOpenOption.READ,
+      //                            StandardOpenOption.WRITE
+      // ).map(MapMode.READ_WRITE, 0, secret.length());
+      // mappedByteBuffer.put(secret.getBytes());
+      //
+      // TimeUnit.SECONDS.sleep(15);
+      //
+      // mappedByteBuffer.flip();
+      //
+      //
+      // var bytes = new byte[secret.length()];
+      // mappedByteBuffer.get(bytes);
+      //
+      // System.out.println("Secret read: " + new String(bytes));
     }
   }
 
