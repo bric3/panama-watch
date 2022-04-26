@@ -99,17 +99,24 @@ if (os.isMacOsX) {
 ///////////////////////////////////////////////////////////////////////
 
 sourceSets {
-  val jextract by creating {
-    java.srcDirs("$buildDir/generated/sources/jextract/java")
-    resources.srcDirs("$buildDir/generated/sources/jextract/resources")
+  val blake3 by creating {
+    java.srcDirs("$buildDir/generated/sources/jextract-blake3/java")
+    // resources.srcDirs("$buildDir/generated/sources/jextract/resources")
+  }
+
+  val syscall by creating {
+    java.srcDirs("$buildDir/generated/sources/jextract-syscall/java")
+    // resources.srcDirs("$buildDir/generated/sources/jextract/resources")
   }
 
   @Suppress("UNUSED_VARIABLE")
   val main by getting {
-    java.srcDirs(jextract.java.srcDirs)
-    resources.srcDirs(jextract.resources.srcDirs)
-//    compileClasspath += sourceSets["jextract"].output
-//    runtimeClasspath += sourceSets["jextract"].output
+    java.srcDirs(blake3.java.srcDirs)
+    java.srcDirs(syscall.java.srcDirs)
+    // resources.srcDirs(blake3.resources.srcDirs)
+    // resources.srcDirs(syscall.resources.srcDirs)
+    // compileClasspath += sourceSets["jextract"].output
+    // runtimeClasspath += sourceSets["jextract"].output
   }
 }
 
@@ -134,11 +141,16 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
   @get:InputFiles
   @get:Optional
   @get:PathSensitive(PathSensitivity.ABSOLUTE)
-  abstract val headerIncludes: ConfigurableFileCollection
+  abstract val headerPathIncludes: ConfigurableFileCollection
 
   @get:InputFiles
+  @get:Optional
   @get:PathSensitive(PathSensitivity.ABSOLUTE)
   abstract val headers: ConfigurableFileCollection
+
+  @get:Input
+  @get:Optional
+  abstract val headerContent: Property<String>
 
   @get:OutputDirectory
   abstract val targetPath: DirectoryProperty
@@ -155,27 +167,14 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
 
   @TaskAction
   override fun exec() {
-    if (Files.notExists(Path.of(jextractBinaryPath.get()))) {
-      throw InvalidUserCodeException("jextract not found at ${jextractBinaryPath.get()}")
-    }
-
-    headerIncludes.files.forEach { includedDirectory ->
-      if (!includedDirectory.isDirectory) {
-        throw InvalidUserCodeException("Not a header directory: '$includedDirectory'")
-      }
-    }
-    headers.files.forEach { header ->
-      if (!header.isFile) {
-        throw InvalidUserCodeException("Not a header directory: '$header'")
-      }
-    }
+    checkInputs()
 
     workingDir = project.projectDir
     executable = jextractBinaryPath.get()
 
     args(
       "--source",
-      "-d", targetPath.get(),
+      "--output", targetPath.get(),
     )
     if (targetPackage.isPresent) {
       args("--target-package", targetPackage.get())
@@ -186,20 +185,23 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
     if (libraryName.isPresent) {
       args("-l", libraryName.get())
     }
-    headerIncludes.files.forEach { headerDirectory ->
+    headerPathIncludes.files.forEach { headerDirectory ->
       args("-I", headerDirectory)
     }
     /* resolved via argument provider */
     argumentProviders.add {
-      val tmpHeader = Files.createTempFile("", ".h")
+      val tmpHeader = Files.createTempFile("", ".h").also {
+        // delaying deletion to after the daemon stops to give a chance to look at the temporary file
+        it.toFile().deleteOnExit()
+      }
 
       Files.writeString(
         tmpHeader,
-        buildString {
+        headerContent.getOrElse(buildString {
           headers.files.forEach { header ->
-            append("#include <${header}>\n")
+            append("""#include "${header}"\n""")
           }
-        }
+        })
       )
       listOf(tmpHeader.toAbsolutePath().toString())
     }
@@ -210,6 +212,25 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
       super.exec()
     } catch (e: Exception) {
       throw GradleException("jextract execution failed", e)
+    }
+  }
+
+  private fun checkInputs() {
+    if (Files.notExists(Path.of(jextractBinaryPath.get()))) {
+      throw InvalidUserCodeException("jextract not found at ${jextractBinaryPath.get()}")
+    }
+    headerPathIncludes.files.forEach { includedDirectory ->
+      if (!includedDirectory.isDirectory) {
+        throw InvalidUserCodeException("Not a header directory: '$includedDirectory'")
+      }
+    }
+    if (headers.files.size > 0 && headerContent.isPresent) {
+      throw InvalidUserCodeException("Use either 'headers' or 'headerContent'")
+    }
+    headers.files.forEach { header ->
+      if (!header.isFile) {
+        throw InvalidUserCodeException("Not a header directory: '$header'")
+      }
     }
   }
 
@@ -233,7 +254,8 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
 tasks.register<JextractTask>("jextractBlake3") {
   headerClassName.set("blake3_h")
   targetPackage.set("blake3")
-  headerIncludes.from(file("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/"))
+  targetPath.set(file("$buildDir/generated/sources/jextract-blake3/java"))
+  headerPathIncludes.from(file("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/"))
   headers.from(file("/Users/brice.dutheil/opensource/BLAKE3/c/blake3.h"))
 
   args(
@@ -256,3 +278,23 @@ tasks.register<JextractTask>("jextractBlake3") {
     "--include-function", "blake3_version",
   )
 }
+
+tasks.register<JextractTask>("jextractSyscall") {
+  headerClassName.set("syscall_h")
+  targetPackage.set("unistd")
+  targetPath.set(file("$buildDir/generated/sources/jextract-syscall/java"))
+  headerPathIncludes.from(file("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/"))
+  headerContent.set(
+    """
+    #include <errno.h>
+    #include <unistd.h>
+    #include <sys/syscall.h>
+    #include <sys/mman.h>
+    """.trimIndent()
+  )
+
+  // args(
+  //   "--dump-includes", "unistd-conf"
+  // )
+}
+tasks.compileJava.get().dependsOn("jextractBlake3", "jextractSyscall")
