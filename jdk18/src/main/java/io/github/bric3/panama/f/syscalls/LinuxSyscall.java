@@ -16,36 +16,26 @@ import jdk.incubator.foreign.MemorySegment;
 import jdk.incubator.foreign.ResourceScope;
 import jdk.incubator.foreign.ValueLayout;
 
-import javax.imageio.stream.FileCacheImageInputStream;
 import java.io.FileDescriptor;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.RandomAccessFile;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileChannel.MapMode;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.util.concurrent.TimeUnit;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Invoke memfd_secret syscall via panama.
  * <p>
  * Linux 5.14 introduces the new syscall memfd_secret which allows to create a
- * anonymous file descriptor that cannot be accessed from the kernel.
+ * anonymous file descriptor that cannot be accessed from the kernel once it's
+ * mapped by the user program.
  * <p>
  * Info :
- * https://github.com/torvalds/linux/commit/1507f51255c9ff07d75909a84e7c0d7f3c4b2f49
+ * <a href="https://github.com/torvalds/linux/commit/1507f51255c9ff07d75909a84e7c0d7f3c4b2f49">commit <code>1507f51255c9ff07d75909a84e7c0d7f3c4b2f49</code></a>
  * <p>
  * Note in order to work, the machine boot has to be configured with
  * <code>secretmem.enable=1</code>
  * <p>
- * Eg (according to https://docs.fedoraproject.org/en-US/fedora/latest/system-administrators-guide/kernel-module-driver-configuration/Working_with_the_GRUB_2_Boot_Loader/
- * and if <code>/etc/default/grub</code> has the entry <code>GRUB_ENABLE_BLSCFG=true</code>)
+ * Eg (according to <a href="https://docs.fedoraproject.org/en-US/fedora/latest/system-administrators-guide/kernel-module-driver-configuration/Working_with_the_GRUB_2_Boot_Loader/">Fedora: working with the bootloader</a>
+ * and if the file <code>/etc/default/grub</code> has an entry <code>GRUB_ENABLE_BLSCFG=true</code>)
  * <pre><code>sudo grubby --update-kernel=ALL --args="secretmem.enable=1"</code></pre>
  * Check config
  * <pre><code>sudo grubby --info=ALL</code></pre>
@@ -53,11 +43,10 @@ import java.util.concurrent.TimeUnit;
  * <pre><code>sudo grubby --update-kernel=ALL --remove-args="secretmem.enable=1"</code></pre>.
  *
  * <strong>Note</strong> : Enabling this prevents hibernation whenever there are active secret memory users.
- * https://github.com/torvalds/linux/commit/9a436f8ff6316c3c1a21a758e14ded930bd615d9
  * <p>
  * Specific command line args :
  * <pre><code>
- * java --add-opens=java.base/java.io=ALL-UNNAMED --add-modules=jdk.incubator.foreign --enable-native-access=ALL-UNNAMED LinuxSyscall.java
+ * java --add-modules=jdk.incubator.foreign --enable-native-access=ALL-UNNAMED LinuxSyscall.java
  * </code></pre>
  */
 public class LinuxSyscall {
@@ -79,9 +68,9 @@ public class LinuxSyscall {
       System.exit(1);
     }
     if (ProcessHandle.current().info().commandLine()
-                     .filter(cl -> cl.contains("--add-opens=java.base/java.io=ALL-UNNAMED"))
+                     .filter(cl -> cl.contains("--add-modules=jdk.incubator.foreign") && cl.contains("--enable-native-access=ALL-UNNAMED"))
                      .isEmpty()) {
-      System.err.println("This program requires --add-opens=java.base/java.io=ALL-UNNAMED");
+      System.err.println("This program requires --add-modules=jdk.incubator.foreign --enable-native-access=ALL-UNNAMED");
       System.exit(1);
     }
     System.out.println("OS version: " + System.getProperty("os.version"));
@@ -89,23 +78,15 @@ public class LinuxSyscall {
     // /usr/include/asm/unistd_64.h
 
     // https://github.com/mkerrisk/man-pages/blob/ae6b221882ce71ba82fcdbe02419a225111502f0/man2/memfd_secret.2
+    memfd_secret_external();
     memfd_secret();
+    // --add-opens=java.base/java.io=ALL-UNNAMED
     memfd_secret_avoid_syscall();
   }
 
   private static void memfd_secret() throws Throwable {
     System.out.println("starting memfd_secret");
     var secret = "p@ss123";
-
-
-    var syscall = systemCLinker.downcallHandle(
-            systemCLinker.lookup("syscall").get(),
-            FunctionDescriptor.of(
-                    ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT // syscall number
-            ).appendArgumentLayouts(ValueLayout.JAVA_INT) // flags
-    );
-
 
     // #define SYS_memfd_secret 447
     var sys_memfd_secret = MethodHandles.insertArguments(systemCLinker.downcallHandle(
@@ -180,7 +161,7 @@ public class LinuxSyscall {
       System.out.println("Mapping");
       var segmentAddress = (MemoryAddress) mmap.invoke(NULL, secret.length(), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (segmentAddress.toRawLongValue() == -1) {
-        System.err.println("mmap failed, errno: " + errno() + ", " + stderror(errno()));
+        System.err.println("mmap failed, errno: " + errno() + ", " + strerror(errno()));
         System.exit(1);
       }
 
@@ -202,15 +183,6 @@ public class LinuxSyscall {
   private static void memfd_secret_avoid_syscall() throws Throwable {
     System.out.println("starting memfd_secret avoiding syscalls");
     var secret = "p@ss123";
-
-
-    var syscall = systemCLinker.downcallHandle(
-            systemCLinker.lookup("syscall").get(),
-            FunctionDescriptor.of(
-                    ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT // syscall number
-            ).appendArgumentLayouts(ValueLayout.JAVA_INT) // flags
-    );
 
 
     // #define SYS_memfd_secret 447
@@ -293,6 +265,23 @@ public class LinuxSyscall {
     }
   }
 
+  private static void memfd_secret_external() {
+    var secret = "secret decryption key".getBytes(StandardCharsets.UTF_8);
+
+    try (var scope = ResourceScope.newConfinedScope()) {
+      var secretSegment = MemfdSecret.create(secret.length, scope).orElseThrow();
+      secretSegment.isNative(); // => true
+
+
+      var onHeap = MemorySegment.ofArray(secret);
+      onHeap.isNative(); // => false
+      var readOnlySecretSegment = secretSegment.copyFrom(onHeap).asReadOnly();
+
+
+      System.out.println("Secret: " + new String(readOnlySecretSegment.toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8));
+    }
+  }
+
   private static FileDescriptor makeFD(int fd) throws Throwable {
     // requires --add-opens=java.base/java.io=ALL-UNNAMED
     var fdInit = MethodHandles.privateLookupIn(FileDescriptor.class, MethodHandles.lookup())
@@ -315,18 +304,18 @@ public class LinuxSyscall {
   }
 
   // char *strerror(int errnum);
-  private static String stderror(int errno) throws Throwable {
+  private static String strerror(int errno) throws Throwable {
     // /* The error code set by various library functions.  */
     // extern int *__errno_location (void) __THROW __attribute_const__;
     // # define errno (*__errno_location ())
 
 
-    var stderror = systemCLinker.downcallHandle(
+    var strerror = systemCLinker.downcallHandle(
             systemCLinker.lookup("strerror").get(),
             FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_INT)
     );
 
-    return ((MemoryAddress) stderror.invoke(errno)).getUtf8String(0);
+    return ((MemoryAddress) strerror.invoke(errno)).getUtf8String(0);
   }
 }
 
@@ -357,13 +346,4 @@ so when writing at -1 it triggers a segmentation fault
 # If you would like to submit a bug report, please visit:
 #   https://bugzilla.redhat.com/enter_bug.cgi?product=Fedora&component=java-latest-openjdk&version=35
 #
- */
-
-/*
-// MemoryAddress is an Addressable, but still
-Exception in thread "main" java.lang.invoke.WrongMethodTypeException: expected (Addressable,int,int,int,long)MemoryAddress but found (MemoryAddress,long,int,int,int,long)MemoryAddress
-	at java.base/java.lang.invoke.Invokers.newWrongMethodTypeException(Invokers.java:523)
-	at java.base/java.lang.invoke.Invokers.checkExactType(Invokers.java:532)
-	at io.github.bric3.panama.f.syscalls.LinuxSyscall.memfd_secret(LinuxSyscall.java:174)
-	at io.github.bric3.panama.f.syscalls.LinuxSyscall.main(LinuxSyscall.java:72)
  */

@@ -152,6 +152,15 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
   @get:Optional
   abstract val headerContent: Property<String>
 
+  @get:InputFiles
+  @get:Optional
+  @get:PathSensitive(PathSensitivity.ABSOLUTE)
+  abstract val argFile: RegularFileProperty
+
+  @get:Input
+  @get:Optional
+  abstract val argFileContent: Property<String>
+
   @get:OutputDirectory
   abstract val targetPath: DirectoryProperty
 
@@ -188,6 +197,18 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
     headerPathIncludes.files.forEach { headerDirectory ->
       args("-I", headerDirectory)
     }
+    if (argFile.isPresent) {
+      args("@${argFile.get().asFile.absolutePath}")
+    } else if (argFileContent.isPresent) {
+      val tmpArgFile = Files.createTempFile("", "").also {
+        // delaying deletion to after the daemon stops to give a chance to look at the temporary file
+        it.toFile().deleteOnExit()
+      }
+      Files.writeString(tmpArgFile, argFileContent.get())
+
+      args("@${tmpArgFile.toAbsolutePath()}")
+    }
+
     /* resolved via argument provider */
     argumentProviders.add {
       val tmpHeader = Files.createTempFile("", ".h").also {
@@ -209,6 +230,7 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
 
     try {
       project.delete(outputs.files)
+      logger.info("Running jextract: {}", commandLine.joinToString(" ") )
       super.exec()
     } catch (e: Exception) {
       throw GradleException("jextract execution failed", e)
@@ -231,6 +253,12 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
       if (!header.isFile) {
         throw InvalidUserCodeException("Not a header directory: '$header'")
       }
+    }
+    if (argFile.isPresent && argFileContent.isPresent) {
+      throw InvalidUserCodeException("Use either 'argFile' or 'argFileContent'")
+    }
+    if (argFile.isPresent && !argFile.get().asFile.isFile) {
+      throw InvalidUserCodeException("File does not exist: '${argFile.get()}'")
     }
   }
 
@@ -292,9 +320,30 @@ tasks.register<JextractTask>("jextractSyscall") {
     #include <sys/mman.h>
     """.trimIndent()
   )
+  
+  argFileContent.set(
+    """
+    --include-function syscall
+    --include-macro SYS_memfd_secret
+    
+    --include-function close
+    --include-function ftruncate
+    
+    --include-function mmap
+    --include-function munmap
+    --include-macro PROT_READ
+    --include-macro PROT_WRITE
+    --include-macro MAP_SHARED
+    
+    --include-function strerror
+    
+    #### Since errno macro is not supported at this time, it is necessary
+    #### to manually resolve errno, and include OS specific declarations.
+    #### e.g. __errno_location is Linux specific
+    --include-function __errno_location
+    """.trimIndent()
+  )
 
-  // args(
-  //   "--dump-includes", "unistd-conf"
-  // )
+  // outputs.upToDateWhen { false }
 }
 tasks.compileJava.get().dependsOn("jextractBlake3", "jextractSyscall")
