@@ -8,10 +8,14 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import org.apache.tools.ant.taskdefs.ConditionTask
+import org.gradle.api.internal.ConventionTask
 import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform
 import org.gradle.process.internal.ExecException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.Paths
 
 
 plugins {
@@ -128,7 +132,8 @@ abstract class JExtractTask @Inject constructor(
   private val objects: ObjectFactory,
   private val providers: ProviderFactory,
   private val layout: ProjectLayout,
-) : AbstractExecTask<JExtractTask>(JExtractTask::class.java) {
+  private val execOperations: ExecOperations,
+) : DefaultTask() {
   @get:Input
   abstract val jextractBinaryPath: Property<String>
 
@@ -158,6 +163,10 @@ abstract class JExtractTask @Inject constructor(
   @get:Optional
   abstract val headerContent: Property<String>
 
+  @get:Input
+  @get:Optional
+  abstract val args: ListProperty<String>
+
   @get:InputFiles
   @get:Optional
   @get:PathSensitive(PathSensitivity.ABSOLUTE)
@@ -171,6 +180,7 @@ abstract class JExtractTask @Inject constructor(
   abstract val targetPath: DirectoryProperty
 
   init {
+    description = "Generate Java bindings from C headers using jextract"
     jextractBinaryPath.convention(getJExtractPath())
     targetPath.convention(layout.buildDirectory.dir("generated/sources/jextract/java"))
     // targetPath.convention(objectFactory.directoryProperty().fileValue(
@@ -181,71 +191,94 @@ abstract class JExtractTask @Inject constructor(
   }
 
   @TaskAction
-  override fun exec() {
+  fun runJextract() {
     checkInputs()
+    project.delete(outputs.files)
 
-    workingDir = project.projectDir
-    executable = jextractBinaryPath.get()
+    val execResult = execOperations.exec {
+      workingDir = project.projectDir
+      executable = jextractBinaryPath.get()
 
-    args(
-      "--source",
-      "--output", targetPath.get(),
-    )
-    if (targetPackage.isPresent) {
-      args("--target-package", targetPackage.get())
-    }
-    if (headerClassName.isPresent) {
-      args("--header-class-name", headerClassName.get())
-    }
-    if (libraryName.isPresent) {
-      args("-l", libraryName.get())
-    }
-    headerPathIncludes.files.forEach { headerDirectory ->
-      args("-I", headerDirectory)
-    }
-    if (argFile.isPresent) {
-      args("@${argFile.get().asFile.absolutePath}")
-    } else if (argFileContent.isPresent) {
-      val tmpArgFile = Files.createTempFile("", "").also {
-        // delaying deletion to after the daemon stops to give a chance to look at the temporary file
-        it.toFile().deleteOnExit()
-      }
-      Files.writeString(tmpArgFile, argFileContent.get())
-
-      args("@${tmpArgFile.toAbsolutePath()}")
-    }
-
-    /* resolved via argument provider */
-    argumentProviders.add {
-      val tmpHeader = Files.createTempFile("", ".h").also {
-        // delaying deletion to after the daemon stops to give a chance to look at the temporary file
-        it.toFile().deleteOnExit()
-      }
-
-      Files.writeString(
-        tmpHeader,
-        headerContent.getOrElse(buildString {
-          headers.files.forEach { header ->
-            append("""#include "${header}"\n""")
-          }
-        })
+      args(
+        "--source",
+        "--output", targetPath.get(),
       )
-      listOf(tmpHeader.toAbsolutePath().toString())
+      if (targetPackage.isPresent) {
+        args("--target-package", targetPackage.get())
+      }
+      if (headerClassName.isPresent) {
+        args("--header-class-name", headerClassName.get())
+      }
+      if (libraryName.isPresent) {
+        args("-l", libraryName.get())
+      }
+      headerPathIncludes.files.forEach { headerDirectory ->
+        args("-I", headerDirectory)
+      }
+      if (argFile.isPresent) {
+        args("@${argFile.get().asFile.absolutePath}")
+      } else if (argFileContent.isPresent) {
+        val tmpArgFile = Files.createTempFile("", "").also {
+          // delaying deletion to after the daemon stops to give a chance to look at the temporary file
+          it.toFile().deleteOnExit()
+        }
+        Files.writeString(tmpArgFile, argFileContent.get())
+
+        args("@${tmpArgFile.toAbsolutePath()}")
+      }
+
+      /* resolved via argument provider */
+      argumentProviders.add {
+        val tmpHeader = Files.createTempFile("", ".h").also {
+          // delaying deletion to after the daemon stops to give a chance to look at the temporary file
+          it.toFile().deleteOnExit()
+        }
+
+        Files.writeString(
+          tmpHeader,
+          headerContent.getOrElse(buildString {
+            headers.files.forEach { header ->
+              append("""#include "${header}"\n""")
+            }
+          })
+        )
+        listOf(tmpHeader.toAbsolutePath().toString())
+      }
+
+
+      isIgnoreExitValue = true // handled
+
+      logger.info("Running jextract: {}", commandLine.joinToString(" "))
     }
 
+    val status = execResult.exitValue
+    when {
+      status == 0 -> logger.info("jextract execution successful")
+      status > 128 -> when (val signal = status - 128) {
+        9 -> {
+          logger.warn("jextract execution terminated with signal SIGKILL")
+          if (DefaultNativePlatform.getCurrentOperatingSystem().isMacOsX) {
+            val jextractFolder = Paths.get(jextractBinaryPath.get()).toRealPath().resolve("../..").normalize().toAbsolutePath()
+            logger.warn(
+              """
+              On macOS, this is likely due to the jextract binary being quarantined.
+              You can fix this by running the following command:
+                  sudo xattr -r -d com.apple.quarantine $jextractFolder
+              """.trimIndent()
+            )
+          }
+        }
+        15 -> logger.warn("jextract execution terminated with signal SIGTERM")
+        else -> logger.warn("jextract execution terminated with signal $signal")
+      }
 
-    try {
-      project.delete(outputs.files)
-      logger.info("Running jextract: {}", commandLine.joinToString(" "))
+      else -> logger.warn("jextract execution failed with exit code $status")
+    }
 
-      super.exec()
-    } catch (e: ExecException) {
+    execResult.assertNormalExitValue()
 
-    } catch (e: Exception) {
-      println( "exec result: " + super.getExecutionResult().orNull)
-      println( "exec result exit: " + super.getExecutionResult().orNull?.exitValue)
-      println("ex: " + e::class)
-      throw GradleException("jextract execution failed", e)
+    if (execResult.exitValue != 0) {
+      throw GradleException("jextract execution failed with exit code ${execResult.exitValue}")
     }
   }
 
@@ -318,24 +351,26 @@ tasks.register<JExtractTask>("jextractBlake3") {
   headerPathIncludes.from(file("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/"))
   headers.from(file("/Users/brice.dutheil/opensource/BLAKE3/c/blake3.h"))
 
-  args(
-    "--include-typedef", "blake3_chunk_state",
-    "--include-typedef", "blake3_hasher",
-    "--include-macro", "BLAKE3_BLOCK_LEN",
-    "--include-macro", "BLAKE3_CHUNK_LEN",
-    "--include-macro", "BLAKE3_KEY_LEN",
-    "--include-macro", "BLAKE3_MAX_DEPTH",
-    "--include-macro", "BLAKE3_OUT_LEN",
-    "--include-macro", "BLAKE3_VERSION_STRING",
-    "--include-function", "blake3_hasher_finalize",
-    "--include-function", "blake3_hasher_finalize_seek",
-    "--include-function", "blake3_hasher_init",
-    "--include-function", "blake3_hasher_init_derive_key",
-    "--include-function", "blake3_hasher_init_derive_key_raw",
-    "--include-function", "blake3_hasher_init_keyed",
-    "--include-function", "blake3_hasher_reset",
-    "--include-function", "blake3_hasher_update",
-    "--include-function", "blake3_version",
+  args.set(
+    listOf(
+      "--include-typedef", "blake3_chunk_state",
+      "--include-typedef", "blake3_hasher",
+      "--include-macro", "BLAKE3_BLOCK_LEN",
+      "--include-macro", "BLAKE3_CHUNK_LEN",
+      "--include-macro", "BLAKE3_KEY_LEN",
+      "--include-macro", "BLAKE3_MAX_DEPTH",
+      "--include-macro", "BLAKE3_OUT_LEN",
+      "--include-macro", "BLAKE3_VERSION_STRING",
+      "--include-function", "blake3_hasher_finalize",
+      "--include-function", "blake3_hasher_finalize_seek",
+      "--include-function", "blake3_hasher_init",
+      "--include-function", "blake3_hasher_init_derive_key",
+      "--include-function", "blake3_hasher_init_derive_key_raw",
+      "--include-function", "blake3_hasher_init_keyed",
+      "--include-function", "blake3_hasher_reset",
+      "--include-function", "blake3_hasher_update",
+      "--include-function", "blake3_version",
+    )
   )
 }
 
