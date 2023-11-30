@@ -9,6 +9,7 @@
  */
 
 import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform
+import org.gradle.process.internal.ExecException
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -100,12 +101,12 @@ if (os.isMacOsX) {
 
 sourceSets {
   val blake3 by creating {
-    java.srcDirs("$buildDir/generated/sources/jextract-blake3/java")
+    java.srcDirs(layout.buildDirectory.dir("generated/sources/jextract-blake3/java"))
     // resources.srcDirs("$buildDir/generated/sources/jextract/resources")
   }
 
   val syscall by creating {
-    java.srcDirs("$buildDir/generated/sources/jextract-syscall/java")
+    java.srcDirs(layout.buildDirectory.dir("generated/sources/jextract-syscall/java"))
     // resources.srcDirs("$buildDir/generated/sources/jextract/resources")
   }
 
@@ -122,7 +123,12 @@ sourceSets {
 
 
 @CacheableTask
-abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class.java) {
+abstract class JExtractTask @Inject constructor(
+  // private val workerExecutor: WorkerExecutor, // TODO explore worker API
+  private val objects: ObjectFactory,
+  private val providers: ProviderFactory,
+  private val layout: ProjectLayout,
+) : AbstractExecTask<JExtractTask>(JExtractTask::class.java) {
   @get:Input
   abstract val jextractBinaryPath: Property<String>
 
@@ -165,8 +171,8 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
   abstract val targetPath: DirectoryProperty
 
   init {
-    jextractBinaryPath.convention(getJextractPath())
-    targetPath.convention(project.layout.buildDirectory.dir("generated/sources/jextract/java"))
+    jextractBinaryPath.convention(getJExtractPath())
+    targetPath.convention(layout.buildDirectory.dir("generated/sources/jextract/java"))
     // targetPath.convention(objectFactory.directoryProperty().fileValue(
     //   project.layout.buildDirectory.dir("/generated/sources/jextract/java")
     //   // project.sourceSets["jextract"].java.sourceDirectories.first()
@@ -230,17 +236,42 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
 
     try {
       project.delete(outputs.files)
-      logger.info("Running jextract: {}", commandLine.joinToString(" ") )
+      logger.info("Running jextract: {}", commandLine.joinToString(" "))
+
       super.exec()
+    } catch (e: ExecException) {
+
     } catch (e: Exception) {
+      println( "exec result: " + super.getExecutionResult().orNull)
+      println( "exec result exit: " + super.getExecutionResult().orNull?.exitValue)
+      println("ex: " + e::class)
       throw GradleException("jextract execution failed", e)
     }
   }
 
   private fun checkInputs() {
     if (Files.notExists(Path.of(jextractBinaryPath.get()))) {
-      throw InvalidUserCodeException("jextract not found at ${jextractBinaryPath.get()}")
+      throw InvalidUserCodeException(
+        buildString {
+          append(
+            """
+            jextract not found at ${jextractBinaryPath.get()}
+            You can find releases for the current JDK on https://jdk.java.net/jextract/
+            You can also build it from source at https://github.com/openjdk/jextract
+            """.trimIndent()
+          )
+
+          if (DefaultNativePlatform.getCurrentOperatingSystem().isMacOsX)
+            append(
+              """
+              Also don't forget to run the following
+                  sudo xattr -r -d com.apple.quarantine path/to/jextract/folder/
+              """.trimIndent()
+            )
+        }
+      )
     }
+
     headerPathIncludes.files.forEach { includedDirectory ->
       if (!includedDirectory.isDirectory) {
         throw InvalidUserCodeException("Not a header directory: '$includedDirectory'")
@@ -262,27 +293,28 @@ abstract class JextractTask : AbstractExecTask<JextractTask>(JextractTask::class
     }
   }
 
-  private fun getJextractPath(): String? {
-    project.findProperty("jextract").let {
-      if (it != null) {
-        return (it as String).replace("\$HOME", System.getProperty("user.home"))
-      }
-
-      val jextractFromEnv = System.getenv("JEXTRACT")
-      if (jextractFromEnv.isNotBlank()) {
-        return jextractFromEnv
-      }
-      throw GradleException("jextract property or JEXTRACT environment variable not set")
+  private fun getJExtractPath(): String {
+    val pathByProperty = project.findProperty("jextract")?.let {
+      (it as String).replace("\$HOME", providers.systemProperty("user.home").get())
+    }?.also {
+      logger.info("Using `jextract` property: $it")
     }
-  }
 
+    return pathByProperty ?: providers.environmentVariable("JEXTRACT")
+      .filter(String::isNotBlank)
+      .orNull
+      ?.also {
+        logger.info("Using `JEXTRACT` environment variable: $it")
+      }
+    ?: throw GradleException("jextract property or JEXTRACT environment variable not set")
+  }
 }
 
 
-tasks.register<JextractTask>("jextractBlake3") {
+tasks.register<JExtractTask>("jextractBlake3") {
   headerClassName.set("blake3_h")
   targetPackage.set("blake3")
-  targetPath.set(file("$buildDir/generated/sources/jextract-blake3/java"))
+  targetPath.set(file(layout.buildDirectory.file("generated/sources/jextract-blake3/java")))
   headerPathIncludes.from(file("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/"))
   headers.from(file("/Users/brice.dutheil/opensource/BLAKE3/c/blake3.h"))
 
@@ -307,10 +339,10 @@ tasks.register<JextractTask>("jextractBlake3") {
   )
 }
 
-tasks.register<JextractTask>("jextractSyscall") {
+tasks.register<JExtractTask>("jextractSyscall") {
   headerClassName.set("syscall_h")
   targetPackage.set("unistd")
-  targetPath.set(file("$buildDir/generated/sources/jextract-syscall/java"))
+  targetPath.set(file(layout.buildDirectory.file("generated/sources/jextract-syscall/java")))
   headerPathIncludes.from(file("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/"))
   headerContent.set(
     """
@@ -320,7 +352,7 @@ tasks.register<JextractTask>("jextractSyscall") {
     #include <sys/mman.h>
     """.trimIndent()
   )
-  
+
   argFileContent.set(
     """
     --include-function syscall
