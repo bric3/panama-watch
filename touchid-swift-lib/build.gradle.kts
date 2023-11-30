@@ -25,8 +25,8 @@ library {
     val arch = DefaultNativePlatform.getCurrentArchitecture()
 
     when {
-      arch.isArm64 -> add(machines.linux.architecture("aarch64"))
-      arch.isAmd64 -> add(machines.linux.architecture("x86_64"))
+      arch.isArm64 -> add(machines.macOS.architecture("arm64"))
+      arch.isAmd64 -> add(machines.macOS.x86_64)
       else -> throw GradleException("Unsupported architecture $arch")
     }
   })
