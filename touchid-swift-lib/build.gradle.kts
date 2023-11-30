@@ -1,3 +1,5 @@
+import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform
+
 /*
  * panama-watch
  *
@@ -18,7 +20,16 @@ plugins {
 
 library {
   linkage.set(listOf(Linkage.SHARED, Linkage.STATIC))
-  targetMachines.set(listOf(machines.linux.x86_64, machines.macOS.x86_64))
+  targetMachines.set(buildList {
+    add(machines.linux.x86_64)
+    val arch = DefaultNativePlatform.getCurrentArchitecture()
+
+    when {
+      arch.isArm64 -> add(machines.linux.architecture("aarch64"))
+      arch.isAmd64 -> add(machines.linux.architecture("x86_64"))
+      else -> throw GradleException("Unsupported architecture $arch")
+    }
+  })
   module.set("TouchIdDemoLib")
 
   // Set compiler flags here due to bug

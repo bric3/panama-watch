@@ -400,10 +400,10 @@ tags
 gradle-app.setting
 
 # Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
-!gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
 
 # Avoid ignore Gradle wrappper properties
-!gradle-wrapper.properties
+!gradle/wrapper/gradle-wrapper.properties
 
 # Cache of project
 .gradletasknamecache
