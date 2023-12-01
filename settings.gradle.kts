@@ -10,9 +10,22 @@
 import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform
 
 rootProject.name = "panama-watch"
-include("jdk18")
+
+plugins {
+  id("org.gradle.toolchains.foojay-resolver-convention") version "0.7.0"
+}
+
+includeBuild("conventions")
+include(
+  "ffm-basic-examples",
+  "ffm-blake3",
+  "ffm-syscall-macos",
+  "ffm-syscall-linux-memfdsecret",
+  "ffm-touchid",
+)
+
 
 val os = DefaultNativePlatform.getCurrentOperatingSystem()
 if (os.isMacOsX) {
-    include("touchid-swift-lib")
+  include("touchid-swift-lib")
 }

@@ -49,21 +49,26 @@ library {
 }
 
 tasks.assemble {
-  tasks.findByName("assembleReleaseStaticMacos")?.let {
-    dependsOn(it)
-    doLast {
-      println("static") // if Linkage.STATIC
-      println("release " + (tasks.named("createReleaseStaticMacos").get() as CreateStaticLibrary).outputFile.get())
-      println("debug " + (tasks.named("createDebugStaticMacos").get() as CreateStaticLibrary).outputFile.get())
-    }
-  }
+  // The documentation suggests there are tasks like 'linkDebug', but in fact
+  // the task name is only a prefix, and the suffixes are variants like target OS and architecture.
+  // https://docs.gradle.org/current/userguide/building_swift_projects.html#sec:introducing_build_variants-swift
 
-  tasks.findByName("assembleReleaseSharedMacos")?.let {
-    dependsOn(it)
-    doLast {
-      println("lib") // if Linkage.SHARED
-      println("release " + (tasks.named("linkReleaseSharedMacos").get() as LinkSharedLibrary).linkedFile.get())
-      println("debug " + (tasks.named("linkDebugSharedMacos").get() as LinkSharedLibrary).linkedFile.get())
+  // Also, those kind tasks are available but do not have output file
+  // - assembleDebugSharedMacosArm64
+  // - assembleDebugStaticMacosArm64
+  // - assembleReleaseSharedMacosArm64
+  // - assembleReleaseStaticMacosArm64
+
+  // CreateStaticLibrary strictly necessary, but it's a good way to check which tasks are available
+  tasks.filter { it is CreateStaticLibrary || it is LinkSharedLibrary }.forEach {
+    // should have tasks that stats with
+    // - linkDebug, linkRelease, createDebug, createRelease
+    logger.info(":assemble Found: " + it.name)
+
+    if (it is LinkSharedLibrary && it.name.startsWith("linkRelease")) {
+      dependsOn(it)
+      logger.info(":assemble Assigning output : " + it.linkedFile.get())
+      this@assemble.outputs.file(it.linkedFile.get()).withPropertyName("path")
     }
   }
 }
