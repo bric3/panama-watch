@@ -1,44 +1,103 @@
-= Panama JDK 18
+= Panama JDK 22
+
+At this time, this can be tested with: https://hub.docker.com/layers/library/openjdk/22-slim-bookworm/images/sha256-1f44e508fe22f84f1308799a0f9ea41517d04d6d0e818039136b93ab73f1b3be?context=explore[openjdk:22-slim-bookworm]
+
+[source,shell]
+----
+$ docker pull openjdk:22-slim-bookworm
+----
+
+More images: https://hub.docker.com/_/openjdk/
 
 == First contact
+
+.Acquire the linker and the symbol lookup
+[source,java]
+----
+Linker LINKER = Linker.nativeLinker();
+SymbolLookup SYMBOL_LOOKUP = LINKER.defaultLookup();
+----
 
 .get the pid of the process
 [source,java]
 ----
-var getpid = CLinker.systemCLinker()
-                    .downcallHandle(
-                            CLinker.systemCLinker().lookup("getpid").get(),
-                            FunctionDescriptor.of(ValueLayout.JAVA_LONG)
-                    );
+var getpid = LINKER.downcallHandle(
+        SYMBOL_LOOKUP.find("getpid").orElseThrow(),
+        FunctionDescriptor.of(ValueLayout.JAVA_LONG) // <1>
+);
 ----
+<1> `getpid` returns the pid of the process
 
 
-.Down call for printf
+.Downcall for printf
 [source,java]
 ----
-CLinker.systemCLinker().lookup("printf").get(),
-FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS) // <1>
+var printf = LINKER.downcallHandle(
+        SYMBOL_LOOKUP.find("printf").orElseThrow(),
+        FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS // <1>
+        )
+);
 ----
-<1> The printf function takes a pointer to a memory address.
+<1> The printf function takes a pointer to a memory address, note the _carrier type_ of the
+`ADDRESS` layout is a `MemorySegment`.
 
 [source,java]
 ----
+try (var arena = Arena.ofConfined()) { // <1>
+  var memorySegment = arena.allocateFrom(str); // <2>
+  return (long) printf.invoke(memorySegment); // <3>
+}
+
 try (var scope = ResourceScope.newConfinedScope()) {
-  var allocator = SegmentAllocator.nativeAllocator(scope); // <1>
-  var memorySegment = allocator.allocateUtf8String(str); // <2>
+  var allocator = SegmentAllocator.nativeAllocator(scope);
+  var memorySegment = allocator.allocateFrom(str); // <2>
   return (long) printf.invoke(memorySegment.address()); // <3>
 }
 ----
-<1> Need an scope and an allocator
-<2> To copy the Java String to a non heap memory segment
-<3> To call the printf function, note the `invoke` / `invokeExact`
+<1> Create an arena _confimed_ to this try-with-resources block
+<2> Copy the Java String to an off-heap memory segment
+<3> Invoke the `printf` function
 
+[TIP]
+=====
+If an `WrongMethodTypeException` is raised
 
-Note the invokeExact
-* `invokeExact((Addressable) memorySegment)`
-* `invokeExact((Addressable) memorySegment.address())`
-* `invoke(memorySegment.address())`
-* `invoke(memorySegment)`
+The message gives hints about misuse.
+
+[source]
+----
+Exception in thread "main" java.lang.invoke.WrongMethodTypeException: handle's method type (MemorySegment)long but found (long)long
+----
+
+* `handle's method type (MemorySegment)long` refers the method descriptor (or signature),
+the argument types are within parenthesis `MemorySegement` and the return type is at the end: `long` ; this is described with the `FunctionDescriptor`
++
+[source,java]
+----
+FunctionDescriptor.of(
+        ValueLayout.JAVA_LONG, // <1>
+        ValueLayout.ADDRESS // <2>
+)
+----
+<1> `JAVA_LONG` is the return type, e.g. `long`
+<2> `ADDRESS` is actually passed as `MemorySegment`
+
+* `but found (long)long` refers to the types seen on the call site, e.g. `(long) mh.invoke(memorySegment.address())`,
+and follows the method descriptor convention: argument types are within parenthesis and return type is at the end.
+
+In this case, the difference is in the type of the argument, a `MemorySegment` is expected,
+but an argument of type `long` is passed.
+
+_`MemorySegment` is expected because it is the carrier type for a `ValueLayout.ADDRESS` is a `MemorySegment`._
+=====
+
+[CAUTION]
+====
+Mind the invoke method `invoke` or `invokeExact`, as the first is able to infer the signature,
+by accommodating type hierarchy, while the second requires the exact same type.
+====
 
 == TouchId
 
@@ -60,18 +119,17 @@ System.loadLibrary("TouchIdDemoLib");
 .Downcall to swift method
 [source,java]
 ----
-var authenticate_user = CLinker.systemCLinker().downcallHandle(
-        SymbolLookup.loaderLookup().lookup("authenticate_user_touchid").get(),
+var authenticate_user = LINKER.downcallHandle(
+        SYMBOL_LOOKUP.lookup("authenticate_user_touchid").get(),
         FunctionDescriptor.ofVoid()
 );
 
-try (var scope = ResourceScope.newConfinedScope()) {
-  authenticate_user.invoke();
-}
+// no arena needed here
+authenticate_user.invoke();
 ----
 
 
-== BLAKE3
+== BLAKE3 (`ffm-blake3`)
 
 === Preparations
 
@@ -88,23 +146,45 @@ gcc -shared -O3 -o libblake3.so blake3.c blake3_dispatch.c blake3_portable.c \
     blake3_avx2.o blake3_avx512.o blake3_sse41.o blake3_sse2.o
 ----
 
+The Gradle project is set up to invoke jextract automatically, just update the `jextract` property.
+This is still possible to run `jextract` manually.
 
+.Invoking `jextract` manually
+=====
 .simple alias to jextract
 [source, bash]
 ----
-alias jextract=$HOME/opensource/jextract/build/jextract.app/Contents/MacOS/jextract
+alias jextract=$HOME/opensource/jextract/build/jextract/bin/jextract
 ----
 
 .generates the blake3 mappings
 [source, bash]
 ----
 jextract \
-  -d jdk18/build/generated/sources/jextract/java \
+  -d ffm-blake3/build/generated/sources/jextract-blake3/java \
   --source \
   --target-package blake3 \
   -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include \
   ~/opensource/BLAKE3/c/blake3.h
+  --include-typedef blake3_chunk_state
+  --include-typedef blake3_hasher
+  --include-constant BLAKE3_BLOCK_LEN
+  --include-constant BLAKE3_CHUNK_LEN
+  --include-constant BLAKE3_KEY_LEN
+  --include-constant BLAKE3_MAX_DEPTH
+  --include-constant BLAKE3_OUT_LEN
+  --include-constant BLAKE3_VERSION_STRING
+  --include-function blake3_hasher_finalize
+  --include-function blake3_hasher_finalize_seek
+  --include-function blake3_hasher_init
+  --include-function blake3_hasher_init_derive_key
+  --include-function blake3_hasher_init_derive_key_raw
+  --include-function blake3_hasher_init_keyed
+  --include-function blake3_hasher_reset
+  --include-function blake3_hasher_update
+  --include-function blake3_version
 ----
+=====
 
 === Of string
 
@@ -117,7 +197,7 @@ System.load("/Users/brice.dutheil/opensource/BLAKE3/c/libblake3.so");
 .Open a scope
 [source, java]
 ----
-try (ResourceScope scope = ResourceScope.newConfinedScope()) {
+try (var arena = Arena.ofConfined()) {
 
 }
 ----
@@ -128,13 +208,13 @@ try (ResourceScope scope = ResourceScope.newConfinedScope()) {
 var hasher = blake3_hasher.allocate(scope); // <1>
 blake3_h.blake3_hasher_init(hasher); // <2>
 ----
-<1> blake3_hasher is specific data structure
-<2> blake3_hasher_init is a function that initializes the hasher
+<1> `blake3_hasher` is a specific data structure
+<2> `blake3_hasher_init` is a function that initializes the hasher
 
 .Add content to hasher
 [source, java]
 ----
-var content = segmentAllocator.allocateUtf8String("Hello panama!\n");
+var content = arena.allocateFrom("Hello panama!\n", StandardCharsets.US_ASCII);
 
 blake3_h.blake3_hasher_update(hasher, content, content.byteSize() - 1);
 ----
@@ -142,9 +222,11 @@ blake3_h.blake3_hasher_update(hasher, content, content.byteSize() - 1);
 .Finish hashing
 [source, java]
 ----
-var out = MemorySegment.allocateNative(
-        MemoryLayout.sequenceLayout(blake3_h.BLAKE3_OUT_LEN(), ValueLayout.JAVA_BYTE),
-        scope
+var out = arena.allocate(
+        MemoryLayout.sequenceLayout(
+                blake3_h.BLAKE3_OUT_LEN(),
+                ValueLayout.JAVA_BYTE
+        )
 );
 blake3_h.blake3_hasher_finalize(hasher, out, blake3_h.BLAKE3_OUT_LEN());
 ----
@@ -155,7 +237,20 @@ blake3_h.blake3_hasher_finalize(hasher, out, blake3_h.BLAKE3_OUT_LEN());
 
 === Of file
 
-.Update the hasher with a segment from a memory mapped file
+A memory segment for a file can only be obtained from a `FileChannel`
+
+[source, java]
+----
+try (Arena arena = Arena.ofConfined();
+     FileChannel channel = FileChannel.open(path)) {
+
+    // ...
+}
+----
+
+Re-using the blake3 hasher from above, the byte array is reused.
+
+.Update the hasher with a segment from a memory-mapped file
 [source, java]
 ----
 var content = MemorySegment.mapFile(
