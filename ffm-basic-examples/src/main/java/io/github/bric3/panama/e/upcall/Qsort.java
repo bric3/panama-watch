@@ -16,7 +16,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.util.Arrays;
 import java.util.concurrent.ThreadLocalRandom;
 
 public class Qsort {
@@ -52,9 +51,13 @@ public class Qsort {
                                      );
 
     try (Arena arena = Arena.ofConfined()) {
-      var compareUpcallSymbol = LINKER.upcallStub(compareHandle, compareDescriptor, arena);
+      var compareUpcallSymbol = LINKER.upcallStub(
+              compareHandle,
+              compareDescriptor,
+              arena
+      );
 
-      var nativeArraySegment = arena.allocateArray(ValueLayout.JAVA_INT, ints);
+      var nativeArraySegment = arena.allocateFrom(ValueLayout.JAVA_INT, ints);
 
       qsort.invoke(
               nativeArraySegment,
@@ -63,9 +66,10 @@ public class Qsort {
               compareUpcallSymbol
       );
 
-      System.out.println(Arrays.toString(nativeArraySegment.toArray(ValueLayout.JAVA_INT)));
+      for (int i : nativeArraySegment.toArray(ValueLayout.JAVA_INT)) {
+        System.out.println(i);
+      }
     }
-
   }
 
   static int qsortCompare(MemorySegment addr1, MemorySegment addr2) {

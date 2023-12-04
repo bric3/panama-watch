@@ -12,7 +12,7 @@ plugins {
   java
 }
 
-val javaVersion = 21
+val javaVersion = 22
 java {
   toolchain {
     languageVersion.set(JavaLanguageVersion.of(javaVersion))

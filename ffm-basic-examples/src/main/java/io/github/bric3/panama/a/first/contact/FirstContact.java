@@ -12,34 +12,41 @@ package io.github.bric3.panama.a.first.contact;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
+import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 
 public class FirstContact {
+
+  public static final Linker LINKER = Linker.nativeLinker();
+  public static final SymbolLookup SYMBOL_LOOKUP = LINKER.defaultLookup();
+
   public static void main(String[] args) throws Throwable {
+    System.out.println(System.getProperty("java.version"));
     System.out.println("pid: " + c_getpid());
     c_printf("Hello C");
   }
 
   public static long c_printf(String str) throws Throwable {
-    var printf = Linker.nativeLinker()
-                       .downcallHandle(
-                               Linker.nativeLinker().defaultLookup().find("printf").orElseThrow(),
-                               FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS)
-                       );
+    var printf = LINKER.downcallHandle(
+            SYMBOL_LOOKUP.find("printf").orElseThrow(),
+            FunctionDescriptor.of(
+                    ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS
+            )
+    );
 
 
     try (var arena = Arena.ofConfined()) {
-      var memorySegment = arena.allocateUtf8String(str);
-      return (long) printf.invoke(memorySegment);
+      var memorySegment = arena.allocateFrom(str);
+      return (long) printf.invokeExact(memorySegment.address());
     }
   }
 
   public static long c_getpid() throws Throwable {
-    var getpid = Linker.nativeLinker()
-                       .downcallHandle(
-                               Linker.nativeLinker().defaultLookup().find("getpid").orElseThrow(),
-                               FunctionDescriptor.of(ValueLayout.JAVA_LONG)
-                       );
+    var getpid = LINKER.downcallHandle(
+            SYMBOL_LOOKUP.find("getpid").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG)
+    );
 
     return (long) getpid.invokeExact();
   }

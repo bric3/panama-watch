@@ -159,6 +159,6 @@ abstract class MemfdSecret {
     // /* The error code set by various library functions.  */
     // extern int *__errno_location (void) __THROW __attribute_const__;
     // # define errno (*__errno_location ())
-    return ((MemorySegment) strerror.invoke(errno)).getUtf8String(0);
+    return ((MemorySegment) strerror.invoke(errno)).getString(0);
   }
 }

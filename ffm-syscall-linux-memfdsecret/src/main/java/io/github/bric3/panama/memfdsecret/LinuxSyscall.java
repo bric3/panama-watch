@@ -20,9 +20,9 @@ import java.lang.invoke.MethodType;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Invoke memfd_secret syscall via panama.
+ * Invoke <code>memfd_secret</code> syscall via panama.
  * <p>
- * Linux 5.14 introduces the new syscall memfd_secret which allows to create a
+ * Linux 5.14 introduces the new syscall <code>memfd_secret</code> which allows creating a
  * anonymous file descriptor that cannot be accessed from the kernel once it's
  * mapped by the user program.
  * <p>
@@ -44,7 +44,7 @@ import java.nio.charset.StandardCharsets;
  * <p>
  * Specific command line args :
  * <pre><code>
- * java --add-modules=jdk.incubator.foreign --enable-native-access=ALL-UNNAMED LinuxSyscall.java
+ * java --enable-native-access=ALL-UNNAMED LinuxSyscall.java
  * </code></pre>
  */
 public class LinuxSyscall {
@@ -66,12 +66,12 @@ public class LinuxSyscall {
       System.exit(1);
     }
     if (ProcessHandle.current().info().commandLine()
-                     .filter(cl -> cl.contains("--add-modules=jdk.incubator.foreign") && cl.contains("--enable-native-access=ALL-UNNAMED"))
+                     .filter(cl -> cl.contains("--enable-native-access=ALL-UNNAMED"))
                      .isEmpty()) {
-      System.err.println("This program requires --add-modules=jdk.incubator.foreign --enable-native-access=ALL-UNNAMED");
+      System.err.println("This program requires --enable-native-access=ALL-UNNAMED");
       System.exit(1);
     }
-    System.out.println("OS version: " + System.getProperty("os.version"));
+    System.out.println(STR."OS version: \{System.getProperty("os.version")}");
     // Reference:
     // /usr/include/asm/unistd_64.h
 
@@ -143,32 +143,32 @@ public class LinuxSyscall {
       var errno = errno();
       System.err.println(errno == 38 ?
                          "tried to call a syscall that doesn't exist (errno=ENOSYS), may need to set the 'secretmem.enable=1' kernel boot option" :
-                         "syscall memfd_secret failed, errno: " + errno);
+                         STR."syscall memfd_secret failed, errno: \{errno()}");
       System.exit(1);
     }
-    System.out.println("Secret mem fd: " + fd);
+    System.out.println(STR."Secret mem fd: \{fd}");
 
     try (Arena scope = Arena.ofConfined()) {
       // Set the size
       System.out.println("Setting size");
       var res = (int) ftruncate.invoke(fd, secret.length());
       if (res == -1) {
-        System.err.println("ftruncate failed, errno: " + errno());
+        System.err.println(STR."ftruncate failed, errno: \{errno()}");
       }
 
       System.out.println("Mapping");
       var segmentAddress = (MemorySegment) mmap.invoke(NULL, secret.length(), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (segmentAddress.address() == -1) {
-        System.err.println("mmap failed, errno: " + errno() + ", " + strerror(errno()));
+        System.err.println(STR."mmap failed, errno: \{errno()}, \{strerror(errno())}");
         System.exit(1);
       }
 
-      System.out.println("segmentAddress: " + segmentAddress);
+      System.out.println(STR."segmentAddress: \{segmentAddress}");
 
-      segmentAddress.setUtf8String(0, secret);
+      segmentAddress.setString(0, secret);
 
 
-      System.out.println("Secret segment contained: " + segmentAddress.getUtf8String(0));;
+      System.out.println(STR."Secret segment contained: \{segmentAddress.getString(0)}");;
 
       var r = (int) munmap.invoke(segmentAddress, secret.length());
     } finally {
@@ -313,7 +313,7 @@ public class LinuxSyscall {
             FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_INT)
     );
 
-    return ((MemorySegment) strerror.invoke(errno)).getUtf8String(0);
+    return ((MemorySegment) strerror.invoke(errno)).getString(0);
   }
 }
 

@@ -15,6 +15,7 @@ import blake3.blake3_hasher;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.ValueLayout;
+import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
 
 public class Blake3 {
@@ -27,24 +28,23 @@ public class Blake3 {
       var hasher = blake3_hasher.allocate(arena);
       blake3_h.blake3_hasher_init(hasher);
 
-
-      var content = arena.allocateUtf8String("Hello panama!\n");
-
+      var content = arena.allocateFrom("Hello panama!\n", StandardCharsets.US_ASCII);
 
       blake3_h.blake3_hasher_update(hasher, content, content.byteSize() - 1);
 
-
       var out = arena.allocate(
-              MemoryLayout.sequenceLayout(blake3_h.BLAKE3_OUT_LEN(), ValueLayout.JAVA_BYTE)
+              MemoryLayout.sequenceLayout(
+                      blake3_h.BLAKE3_OUT_LEN(),
+                      ValueLayout.JAVA_BYTE
+              )
       );
       blake3_h.blake3_hasher_finalize(hasher, out, blake3_h.BLAKE3_OUT_LEN());
-
 
       var sigBytes = out.toArray(ValueLayout.JAVA_BYTE);
       var sigHex = HexFormat.of().formatHex(sigBytes);
       System.out.println(sigHex);
 
-      assert sigHex.equalsIgnoreCase("b95c35ea189068be5f737282c3248277a6398fab7826ef128607e4415ab8558d") : "oups";
+      assert "b95c35ea189068be5f737282c3248277a6398fab7826ef128607e4415ab8558d".equalsIgnoreCase(sigHex) : "Signatures don't match";
     }
   }
 }

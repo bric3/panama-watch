@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
 
 public class MacOsSyscalls {
 
@@ -63,7 +64,7 @@ public class MacOsSyscalls {
   }
   private static Linker systemLinker = Linker.nativeLinker();
   public static final MethodHandle __error = systemLinker.downcallHandle(FunctionDescriptor.of(
-          ValueLayout.ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(JAVA_BYTE))
+          ValueLayout.ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(1, JAVA_BYTE))
   ));
   public static final MethodHandle strerror = systemLinker.downcallHandle(
           systemLinker.defaultLookup().find("strerror").orElseThrow(),
@@ -132,18 +133,18 @@ public class MacOsSyscalls {
             FunctionDescriptor.of(
                     ValueLayout.JAVA_INT,
                     ValueLayout.JAVA_INT
-            ).appendArgumentLayouts(ValueLayout.ADDRESS)
+            ).appendArgumentLayouts(ValueLayout.ADDRESS, JAVA_INT)
     );
 
     // #define	SYS_mkdir          136
     var sys_mkdir = MethodHandles.insertArguments(syscall, 0, 136);
 
     try (Arena arena = Arena.ofConfined()) {
-      var str = arena.allocateUtf8String(path.toString());
+      var str = arena.allocateFrom(path.toString());
 
-      int res = (int) sys_mkdir.invokeExact(str);
+      int res = (int) sys_mkdir.invokeExact(str, 0744);
       if (res == -1) {
-        System.err.println(strerror(errno()));
+        System.err.println(STR."errno: \{strerror(errno())}");
       }
     }
 
@@ -157,12 +158,12 @@ public class MacOsSyscalls {
 
 
     try (Arena arena = Arena.ofConfined()) {
-      var str = arena.allocateUtf8String(path.toString());
+      var str = arena.allocateFrom(path.toString());
 
       // #define	SYS_mkdir          136
-      int mkdirRes = syscall_h.syscall(syscall_h.SYS_mkdir(), str.address());
+      int mkdirRes = syscall_h.syscall(syscall_h.SYS_mkdir(), str.address(), 0744);
       if (mkdirRes == -1) {
-        System.err.println("errno: " + strerror(errno()));
+        System.err.println(STR."errno: \{strerror(errno())}");
       }
 
 
@@ -195,6 +196,6 @@ public class MacOsSyscalls {
     // /* The error code set by various library functions.  */
     // extern int *__errno_location (void) __THROW __attribute_const__;
     // # define errno (*__errno_location ())
-    return ((MemorySegment) strerror.invokeExact(errno)).reinterpret(Long.MAX_VALUE).getUtf8String(0);
+    return ((MemorySegment) strerror.invokeExact(errno)).reinterpret(Long.MAX_VALUE).getString(0);
   }
 }

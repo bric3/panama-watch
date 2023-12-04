@@ -9,9 +9,8 @@
  */
 package io.github.bric3.panama.touchid;
 
-import java.lang.foreign.Arena;
-import java.lang.foreign.Linker;
 import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.SymbolLookup;
 
 public class TouchId {
@@ -29,8 +28,6 @@ public class TouchId {
             FunctionDescriptor.ofVoid()
     );
 
-    try (var scope = Arena.ofConfined()) {
-      authenticate_user.invoke();
-    }
+    authenticate_user.invoke();
   }
 }

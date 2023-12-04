@@ -19,7 +19,6 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileChannel.MapMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.HexFormat;
 
 public class Blake3Sum {
@@ -29,7 +28,7 @@ public class Blake3Sum {
     System.load("/Users/brice.dutheil/opensource/BLAKE3/c/libblake3.so");
 
     try (Arena arena = Arena.ofConfined();
-         FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+         FileChannel channel = FileChannel.open(path)) {
       var start = System.nanoTime();
 
       var hasher = blake3_hasher.allocate(arena);
