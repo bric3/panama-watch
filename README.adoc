@@ -146,7 +146,32 @@ gcc -shared -O3 -o libblake3.so blake3.c blake3_dispatch.c blake3_portable.c \
     blake3_avx2.o blake3_avx512.o blake3_sse41.o blake3_sse2.o
 ----
 
-The Gradle project is set up to invoke jextract automatically, just update the `jextract` property.
+The Gradle project is set up to invoke `jextract` automatically, just update the `jextract_home` property.
+
+[NOTE]
+======
+Download `jextract` on https://jdk.java.net/jextract/ for released JDKs.
+
+Or, for unreleased JDKs, build form source https://github.com/openjdk/jextract.
+
+Choose available branch, e.g. `jdk22`, look at the build instructions. The build is
+based on Gradle and as such needs a JDK, up-to-now the version is 7.3.3, so it needs
+JDK 17 to run Gradle. Also, usually previous or current JDK is needed, and one of the
+latest **LLVM** distributions, they are passed on cli via specific Gradle properties
+(could be set in `$HOME/.gradle.init.properties`).
+
+[source,shell]
+----
+sh ./gradlew \
+  -Pjdk22_home=$HOME/.asdf/installs/java/openjdk-22-ea+26 \
+  -Pllvm_home=$(brew --prefix llvm) \
+  clean verify
+----
+
+Then set the path to the `jextract` home directory.
+======
+
+
 This is still possible to run `jextract` manually.
 
 .Invoking `jextract` manually

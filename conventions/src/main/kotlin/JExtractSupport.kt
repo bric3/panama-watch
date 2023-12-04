@@ -27,7 +27,7 @@ import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
-import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.PathSensitivity.ABSOLUTE
 import org.gradle.api.tasks.SourceSetContainer
 import org.gradle.api.tasks.TaskAction
 import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform
@@ -67,6 +67,10 @@ fun Project.configureJExtractSourceSet(name: String): Provider<Directory> {
   return srcPath
 }
 
+private const val JEXTRACT_BINARY_RELATIVE_PATH = "/bin/jextract"
+private const val JEXTRACT_HOME_ENV_NAME = "JEXTRACT_HOME"
+private const val JEXTRACT_HOME_PROPERTY_NAME = "jextract_home"
+
 @CacheableTask
 abstract class JExtractTask @Inject constructor(
   // private val workerExecutor: WorkerExecutor, // TODO explore worker API
@@ -76,7 +80,7 @@ abstract class JExtractTask @Inject constructor(
   private val execOperations: ExecOperations,
 ) : DefaultTask() {
   @get:Input
-  abstract val jextractBinaryPath: Property<String>
+  abstract val jextractHome: Property<String>
 
   @get:Input
   @get:Optional
@@ -92,12 +96,12 @@ abstract class JExtractTask @Inject constructor(
 
   @get:InputFiles
   @get:Optional
-  @get:PathSensitive(PathSensitivity.ABSOLUTE)
+  @get:PathSensitive(ABSOLUTE)
   abstract val headerPathIncludes: ConfigurableFileCollection
 
   @get:InputFiles
   @get:Optional
-  @get:PathSensitive(PathSensitivity.ABSOLUTE)
+  @get:PathSensitive(ABSOLUTE)
   abstract val headers: ConfigurableFileCollection
 
   @get:Input
@@ -110,7 +114,7 @@ abstract class JExtractTask @Inject constructor(
 
   @get:InputFiles
   @get:Optional
-  @get:PathSensitive(PathSensitivity.ABSOLUTE)
+  @get:PathSensitive(ABSOLUTE)
   abstract val argFile: RegularFileProperty
 
   @get:Input
@@ -122,7 +126,7 @@ abstract class JExtractTask @Inject constructor(
 
   init {
     description = "Generate Java bindings from C headers using jextract"
-    jextractBinaryPath.convention(getJExtractPath())
+    jextractHome.convention(getJExtractPathHome())
     targetPath.convention(layout.buildDirectory.dir("generated/sources/jextract/java"))
     // targetPath.convention(objectFactory.directoryProperty().fileValue(
     //   project.layout.buildDirectory.dir("/generated/sources/jextract/java")
@@ -138,7 +142,7 @@ abstract class JExtractTask @Inject constructor(
 
     val execResult = execOperations.exec {
       workingDir = project.projectDir
-      executable = jextractBinaryPath.get()
+      executable = jextractHome.map { it + JEXTRACT_BINARY_RELATIVE_PATH }.get()
 
       args(
         "--source",
@@ -199,13 +203,13 @@ abstract class JExtractTask @Inject constructor(
         9 -> {
           logger.warn("jextract execution terminated with signal SIGKILL")
           if (DefaultNativePlatform.getCurrentOperatingSystem().isMacOsX) {
-            val jextractFolder =
-              Paths.get(jextractBinaryPath.get()).toRealPath().resolve("../..").normalize().toAbsolutePath()
+            val jextractHome =
+              Paths.get(jextractHome.get()).toRealPath().resolve("../..").normalize().toAbsolutePath()
             logger.warn(
               """
               On macOS, this is likely due to the jextract binary being quarantined.
               You can fix this by running the following command:
-                  sudo xattr -r -d com.apple.quarantine $jextractFolder
+                  sudo xattr -r -d com.apple.quarantine $jextractHome
               """.trimIndent()
             )
           }
@@ -226,12 +230,12 @@ abstract class JExtractTask @Inject constructor(
   }
 
   private fun checkInputs() {
-    if (Files.notExists(Paths.get(jextractBinaryPath.get()))) {
+    if (Files.notExists(Paths.get(jextractHome.get()))) {
       throw InvalidUserCodeException(
         buildString {
           append(
             """
-            jextract not found at ${jextractBinaryPath.get()}
+            jextract not found at ${jextractHome.get()}$JEXTRACT_BINARY_RELATIVE_PATH
             You can find releases for the current JDK on https://jdk.java.net/jextract/
             You can also build it from source at https://github.com/openjdk/jextract
             """.trimIndent()
@@ -269,19 +273,19 @@ abstract class JExtractTask @Inject constructor(
     }
   }
 
-  private fun getJExtractPath(): String {
-    val pathByProperty = project.findProperty("jextract")?.let {
+  private fun getJExtractPathHome(): String {
+    val pathByProperty = project.findProperty(JEXTRACT_HOME_PROPERTY_NAME)?.let {
       (it as String).replace("\$HOME", providers.systemProperty("user.home").get())
     }?.also {
-      logger.info("Using `jextract` property: $it")
+      logger.info("Using `$JEXTRACT_HOME_PROPERTY_NAME` property: $it")
     }
 
-    return pathByProperty ?: providers.environmentVariable("JEXTRACT")
+    return pathByProperty ?: providers.environmentVariable(JEXTRACT_HOME_ENV_NAME)
       .filter(String::isNotBlank)
       .orNull
       ?.also {
-        logger.info("Using `JEXTRACT` environment variable: $it")
+        logger.info("Using `$JEXTRACT_HOME_ENV_NAME` environment variable: $it")
       }
-    ?: throw GradleException("jextract property or JEXTRACT environment variable not set")
+    ?: throw GradleException("$JEXTRACT_HOME_PROPERTY_NAME property or $JEXTRACT_HOME_ENV_NAME environment variable not set")
   }
 }

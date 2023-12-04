@@ -30,7 +30,7 @@ tasks {
     jvmArgs(
       "-ea",
       "--enable-native-access=ALL-UNNAMED",
-      "--enable-preview"
+      "--enable-preview" // For String templates only now
     )
 
     environment = mapOf(
@@ -43,7 +43,7 @@ tasks {
   withType<JavaCompile>().configureEach {
     options.release.set(javaVersion)
     options.compilerArgs = listOf(
-      "--enable-preview",
+      "--enable-preview", // For String templates only now
       "-Xlint:preview"
     )
     options.isFailOnError = false
