@@ -116,9 +116,9 @@ public class MacOsSyscalls {
     int pid = (int) sys_getpid.invoke();
     int uid = (int) sys_getuid.invoke();
     int gid = (int) sys_getgid.invoke();
-    System.out.println("pid: " + pid);
-    System.out.println("uid: " + uid); // $ id -u
-    System.out.println("gid: " + gid); // $ id -g
+    System.out.println(STR."pid: \{pid}");
+    System.out.println(STR."uid: \{uid}"); // $ id -u
+    System.out.println(STR."gid: \{gid}"); // $ id -g
 
   }
 

@@ -38,7 +38,7 @@ public class FirstContact {
 
     try (var arena = Arena.ofConfined()) {
       var memorySegment = arena.allocateFrom(str);
-      return (long) printf.invokeExact(memorySegment.address());
+      return (long) printf.invokeExact(memorySegment);
     }
   }
 
