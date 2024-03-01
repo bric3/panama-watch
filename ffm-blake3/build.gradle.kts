@@ -22,7 +22,7 @@ val jextractBlake3 by tasks.registering(JExtractTask::class) {
   headerClassName.set("blake3_h")
   targetPackage.set("blake3")
   targetPath.set(file(blake3SourcePath))
-  headerPathIncludes.from(file("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/"))
+  // headerPathIncludes.from(file("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/"))
   headers.from(file("/Users/brice.dutheil/opensource/BLAKE3/c/blake3.h"))
 
   args.set(

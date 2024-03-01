@@ -79,54 +79,129 @@ abstract class JExtractTask @Inject constructor(
   private val layout: ProjectLayout,
   private val execOperations: ExecOperations,
 ) : DefaultTask() {
+  /**
+   * Sets the path to the `jextract` binary home folder.
+   */
   @get:Input
   abstract val jextractHome: Property<String>
 
-  @get:Input
-  @get:Optional
-  abstract val targetPackage: Property<String>
-
+  /**
+   * Sets the library name for this header, e.g. will add `--library mylib` argument.
+   *
+   * TODO multiple library names are supported
+   */
   @get:Input
   @get:Optional
   abstract val libraryName: Property<String>
 
+  /**
+   * Sets the package name for this header, e.g. will add `--target-package my.pkg` argument.
+   */
+  @get:Input
+  @get:Optional
+  abstract val targetPackage: Property<String>
+
+  /**
+   * Simple name class for this [headers], e.g. will add `--header-class-name MyLibrary`.
+   */
   @get:Input
   @get:Optional
   abstract val headerClassName: Property<String>
 
+  /**
+   * Includes header directories that are needed to parse [headers],
+   * will add `--include-dir path/to/include`.
+   */
   @get:InputFiles
   @get:Optional
   @get:PathSensitive(ABSOLUTE)
   abstract val headerPathIncludes: ConfigurableFileCollection
 
+  /**
+   * Sets the header files that will be parsed.
+   *
+   * If a single file is passed, the command line will be equivalent to
+   * ```shell
+   * $ jextract ... theHeader.h
+   * ```
+   *
+   * However, if multiple files are passed, a generated header file
+   * will be created, that will import each of these headers.
+   * ```shell
+   * $ <<-TMP_HEADER_FILE > tmp.h
+   * #include "path/to/header1.h"
+   * #include "path/to/header1.h"
+   * TMP_HEADER_FILE
+   * ```
+   *
+   * And then passed to jextract as
+   * ```shell
+   * $ jextract ... tmp.h
+   * ```
+   *
+   * If [headerContent] is set, this property is ignored.
+   */
   @get:InputFiles
   @get:Optional
   @get:PathSensitive(ABSOLUTE)
   abstract val headers: ConfigurableFileCollection
 
+  /**
+   * Sets the content of the header file that will be parsed.
+   *
+   * The content should be of the form:
+   *
+   * ```c
+   * #include "path/to/header1.h"
+   * #include "path/to/header1.h"
+   * ```
+   */
   @get:Input
   @get:Optional
   abstract val headerContent: Property<String>
 
+  /**
+   * Lists of arguments to pass to `jextract`.
+   *
+   * Can be replaced by [argFile] or [argFileContent].
+   * If both are set, [args] is applied before [argFile] or [argFileContent].
+   * @see argFile
+   * @see argFileContent
+   */
   @get:Input
   @get:Optional
   abstract val args: ListProperty<String>
 
+  /**
+   * Pass an arg file on the cli, e.g. `@argFile.txt`.
+   * @see argFileContent
+   */
   @get:InputFiles
   @get:Optional
   @get:PathSensitive(ABSOLUTE)
   abstract val argFile: RegularFileProperty
 
+  /**
+   * Use the [argFileContent] content as the arg file, and pass it on the cli, e.g. `@tmpArgFile.txt`.
+   * Ignored if [argFile] is set.
+   * @see argFile
+   */
   @get:Input
   @get:Optional
   abstract val argFileContent: Property<String>
 
+  /**
+   * Sets the location of the generated files, e.g. will add `--output location` argument.
+   *
+   * By default, in `build/generated/sources/jextract/java`.
+   */
   @get:OutputDirectory
   abstract val targetPath: DirectoryProperty
 
   init {
     description = "Generate Java bindings from C headers using jextract"
     jextractHome.convention(getJExtractPathHome())
+    // TODO setup convention sourceSet if used (configureJExtractSourceSet)
     targetPath.convention(layout.buildDirectory.dir("generated/sources/jextract/java"))
     // targetPath.convention(objectFactory.directoryProperty().fileValue(
     //   project.layout.buildDirectory.dir("/generated/sources/jextract/java")
@@ -155,11 +230,12 @@ abstract class JExtractTask @Inject constructor(
         args("--header-class-name", headerClassName.get())
       }
       if (libraryName.isPresent) {
-        args("-l", libraryName.get())
+        args("--library", libraryName.get())
       }
       headerPathIncludes.files.forEach { headerDirectory ->
-        args("-I", headerDirectory)
+        args("-include-dir", headerDirectory)
       }
+      args(this@JExtractTask.args.get())
       if (argFile.isPresent) {
         args("@${argFile.get().asFile.absolutePath}")
       } else if (argFileContent.isPresent) {
