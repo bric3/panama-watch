@@ -233,7 +233,7 @@ abstract class JExtractTask @Inject constructor(
         args("--library", libraryName.get())
       }
       headerPathIncludes.files.forEach { headerDirectory ->
-        args("-include-dir", headerDirectory)
+        args("--include-dir", headerDirectory)
       }
       args(this@JExtractTask.args.get())
       if (argFile.isPresent) {
