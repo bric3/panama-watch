@@ -21,11 +21,15 @@ include(
   "ffm-blake3",
   "ffm-syscall-macos",
   "ffm-syscall-linux-memfdsecret",
+  "ffm-hello-swift",
   "ffm-touchid",
 )
 
 
 val os = DefaultNativePlatform.getCurrentOperatingSystem()
 if (os.isMacOsX) {
-  include("touchid-swift-lib")
+  include(
+    "ffm-hello-swift-lib",
+    "touchid-swift-lib",
+  )
 }
